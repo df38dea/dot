@@ -33,6 +33,7 @@ setopt hist_save_no_dups hist_find_no_dups hist_ignore_dups hist_ignore_space hi
 ############
 ### Prompt
 ############
+# . "${ZDOTDIR}/prompt.zsh"
 
 # Modified based on zimfw/asciiship & fff7d1bc/conf-mgmt & ohmyzsh/ohmyzsh/blob/master/themes/fishy.zsh-theme
 # https://gist.github.com/poscat0x04/152faf5087e261314c0961dd3c3367ec
@@ -40,13 +41,14 @@ setopt hist_save_no_dups hist_find_no_dups hist_ignore_dups hist_ignore_space hi
 zmodload zsh/datetime
 zmodload zsh/system
 
-typeset -gA _asciiship_state
-typeset -gA _asciiship_info
-typeset -g _asciiship_git_fd=0
-typeset -g _asciiship_env_fd=0
+typeset -gA _asciiship
 
-_asciiship_state=(
+_asciiship=(
   start_time  0
+  git_fd      -1
+  env_fd      -1
+  git         ""
+  env         ""
 )
 
 _asciiship_get_shortened_dir() {
@@ -131,7 +133,7 @@ _asciiship_git_helper() {
     eval $result
 
     if [[ -z "$branch" ]]; then
-      _asciiship_info[git]=""
+      _asciiship[git]=""
     else
       local status_text=""
       [[ $ahead      -gt 0 ]] && status_text+="%F{82}⇡${ahead}%f"
@@ -148,9 +150,9 @@ _asciiship_git_helper() {
       local close="%b%F{blue}]%f"
       
       if [[ -n "$status_text" ]]; then
-        _asciiship_info[git]=" %F{white}on ${open}${branch}%F{101}:${status_text}${close}${git_state}"
+        _asciiship[git]=" %F{white}on ${open}${branch}%F{101}:${status_text}${close}${git_state}"
       else
-        _asciiship_info[git]=" %F{white}on ${open}${branch}${close}${git_state}"
+        _asciiship[git]=" %F{white}on ${open}${branch}${close}${git_state}"
       fi
     fi
 
@@ -158,21 +160,21 @@ _asciiship_git_helper() {
   fi
 
   _asciiship_cleanup_fd "$fd"
-  _asciiship_git_fd=0
+  _asciiship[git_fd]=-1
 }
 
 _asciiship_git_render() {
-  _asciiship_cleanup_fd "$_asciiship_git_fd"
+  _asciiship_cleanup_fd "$_asciiship[git_fd]"
 
   if ! zstyle -t ':asciiship:' git-info; then
-    _asciiship_info[git]=""
+    _asciiship[git]=""
     return
   fi
 
   local git_dir
-  git_dir=$(git rev-parse --git-dir 2>/dev/null) || { _asciiship_info[git]=""; return }
-
-  exec {_asciiship_git_fd}< <(
+  git_dir=$(git rev-parse --git-dir 2>/dev/null) || { _asciiship[git]=""; return }
+  local fd=-1
+  exec {fd}< <(
     local current_state=""
     [[ -f $git_dir/MERGE_HEAD                              ]] && current_state=" %F{red}(merge)%f"
     [[ -d $git_dir/rebase-merge || -d $git_dir/rebase-apply ]] && current_state=" %F{red}(rebase)%f"
@@ -208,8 +210,9 @@ _asciiship_git_render() {
         branch, ahead, behind, conflicted, stashed, staged, renamed, deleted, modified, untracked, git_state
     }'
   )
-
-  zle -F "$_asciiship_git_fd" _asciiship_git_helper
+  
+  _asciiship[git_fd]="$fd"
+  zle -F "$fd" _asciiship_git_helper
 }
 
 _asciiship_env_helper() {
@@ -251,31 +254,32 @@ _asciiship_env_helper() {
     fi
 
     if [[ -n "$final_content" ]]; then
-      _asciiship_info[env]=" %F{242}via %F{blue}[%f${final_content}%F{blue}]%f"
+      _asciiship[env]=" %F{242}via %F{blue}[%f${final_content}%F{blue}]%f"
     else
-      _asciiship_info[env]=""
+      _asciiship[env]=""
     fi
 
     zle && zle reset-prompt
   fi
 
   _asciiship_cleanup_fd "$fd"
-  _asciiship_env_fd=0
+  _asciiship[env_fd]=-1
 }
 
 _asciiship_env_render() {
-  _asciiship_cleanup_fd "$_asciiship_env_fd"
+  _asciiship_cleanup_fd "$_asciiship[env_fd]"
 
   if ! zstyle -t ':asciiship:' env-info; then
     if [[ -n "$VIRTUAL_ENV" ]]; then
-      _asciiship_info[env]=" %F{242}via %F{blue}[%B%F{yellow}${VIRTUAL_ENV:t}%f%b%F{blue}]%f"
+      _asciiship[env]=" %F{242}via %F{blue}[%B%F{yellow}${VIRTUAL_ENV:t}%f%b%F{blue}]%f"
     else
-      _asciiship_info[env]=""
+      _asciiship[env]=""
     fi
     return
   fi
 
-  exec {_asciiship_env_fd}< <(
+  local fd=-1
+  exec {fd}< <(
     local current_dir="$PWD"
     local -A found
     local results=()
@@ -297,11 +301,12 @@ _asciiship_env_render() {
     echo "${(j:,:)results}"
   )
 
-  zle -F "$_asciiship_env_fd" _asciiship_env_helper
+  _asciiship[env_fd]=$fd
+  zle -F "$fd" _asciiship_env_helper
 }
 
 preexec() {
-  _asciiship_state[start_time]=$EPOCHSECONDS
+  _asciiship[start_time]=$EPOCHSECONDS
   _asciiship_title_updater preexec "$1"
 }
 
@@ -309,10 +314,10 @@ precmd() {
   local _dir
   _dir="$(_asciiship_get_shortened_dir)"
 
-  if (( _asciiship_state[start_time] > 0 )); then
-    local -i elapsed=$(( EPOCHSECONDS - _asciiship_state[start_time] ))
+  if (( _asciiship[start_time] > 0 )); then
+    local -i elapsed=$(( EPOCHSECONDS - _asciiship[start_time] ))
     (( elapsed > 3 )) && RPROMPT="%F{yellow}$(_asciiship_duration_format $elapsed)%f" || RPROMPT=""
-    _asciiship_state[start_time]=0
+    _asciiship[start_time]=0
   else
     RPROMPT=""
   fi
@@ -322,7 +327,7 @@ precmd() {
   _asciiship_env_render
 
   PROMPT='
-%(2L.%B%F{white}(%L)%f%b .)%(!.%B%F{red}%n%f%b in .%B%F{blue}${SSH_TTY:+"%n@%m in "}%f%b)%B%F{cyan}'"$_dir"'%f%b${_asciiship_info[git]}${_asciiship_info[env]}
+%(2L.%B%F{white}(%L)%f%b .)%(!.%B%F{red}%n%f%b in .%B%F{blue}${SSH_TTY:+"%n@%m in "}%f%b)%B%F{cyan}'"$_dir"'%f%b${_asciiship[git]}${_asciiship[env]}
 %B%(1j.%F{blue}*%f .)%(?.%F{green}.%F{red}%? )%#%f%b '
 }
 
@@ -665,6 +670,7 @@ zinit wait"0c" lucid light-mode for \
 ############
 
 # prompt optional
+zstyle ':asciiship:' env-info true
 zstyle ':asciiship:' git-info true
 zstyle ':asciiship:' dir-short true
 
